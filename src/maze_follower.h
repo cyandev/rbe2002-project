@@ -8,7 +8,7 @@ class MazeFollower {
         const float Kd = 2;
         const float MIN_DIST_CM = 25;
         const float OMEGA_MAX = 200; //mm/s
-        const double FOLLOW_SPEED = 350; //mm/s
+        double FOLLOW_SPEED = 250; //mm/s
         float omega = 0;
 
     public:
@@ -19,5 +19,5 @@ class MazeFollower {
 
         //get angular velocity in mm/s at outer wheel (too lazy for rad/s)
         double getAngularVelocity();
-        
+        void setVelocity(double v);
 };

@@ -14,14 +14,14 @@ double MazeFollower::getVelocity() {
   double distance = ir.ReadData();
   Serial.println(distance);
   double err = min(0,distance-MIN_DIST_CM);
-  return FOLLOW_SPEED+err*50;
+  return FOLLOW_SPEED+err*20;
 }
 
 double MazeFollower::getAngularVelocity() {
   double distance = ir.ReadData();
   double err = distance-MIN_DIST_CM;
   if (err > 0 && abs(omega) > .1) {
-    omega *= .9;
+    omega *= .95;
   } else {
     if (abs(omega) < OMEGA_MAX/2 && rand() % 3 == 0) {
       omega *= -1;
@@ -30,4 +30,8 @@ double MazeFollower::getAngularVelocity() {
   }
 
   return omega; //turn right
+}
+
+void MazeFollower::setVelocity(double v) {
+  FOLLOW_SPEED = v;
 }

@@ -8,6 +8,7 @@
 //behaviors
 #include "Speed_controller.h"
 #include "maze_follower.h"
+#include "IMU.h"
 enum ROBOT_STATE {RUNNING, SEEKING, CHASING};
 ROBOT_STATE robot_state = RUNNING;
 
@@ -18,30 +19,58 @@ Romi32U4ButtonA buttonA;
 SpeedController speedController;
 MazeFollower mazeFollower;
 OpenMV camera;
+IMU_sensor lsm6;
 AprilTagDatum tag; //store the tag data for the last seen tag
 
+unsigned long last_collision = millis();
+
+unsigned long last_tag = millis();
 void sendMessage(const String& topic, const String& message)
 {
     Serial1.println(topic + String(':') + message);
 }
 
 
-void handleSerialEsp32(String s) {
-  //todo: implement me :)
-}
-
-String esp32str;
+String esp32str = "";
 void checkSerialEsp32()
 {
     while(Serial1.available())
     {
         char c = Serial1.read();
-        esp32str += c;
+
+        if (c == '\r') continue; //no carriage returns
 
         if(c == '\n')
         {
-            return handleSerialEsp32(esp32str);
-            esp32str = "";
+          Serial.println(esp32str);
+          String topic = esp32str.substring(0,esp32str.indexOf(':'));
+          String value = esp32str.substring(esp32str.indexOf(':') + 1);
+
+          Serial.println(topic);
+          Serial.println(value);
+          if (topic.equals("it")) {
+              if (value == String(_ROBOT_NUM)) {
+                Serial.println("state changed to seeking");
+                robot_state = SEEKING;
+              } else {
+                Serial.println("state changed to running");
+                robot_state = RUNNING;
+              }
+            }
+
+            if (topic == "collision" && (robot_state == SEEKING || robot_state == CHASING)) {
+              Serial.println("collision");
+              Serial.println(millis()-last_collision);
+              if (millis()-last_collision < 500) {
+                Serial.println("tag ur it");
+                sendMessage("it", value);
+                robot_state = RUNNING;
+              }
+            }
+
+          esp32str = "";
+        } else {
+          esp32str += c;
         }
     }
 }
@@ -54,18 +83,13 @@ bool findTag()
       if(camera.readTag(tag))
       {
         if (tag.id == 4) {
-          double dist_cm = sqrt(pow(tag.tx*X_FACTOR, 2) + pow(tag.tz*Z_FACTOR, 2)); //find the distance in x/z plane; y doesn't matter
-          double angle_rad = atan2(tag.tx*X_FACTOR,tag.tz*Z_FACTOR);
-
-          Serial.print("found tag 4 dist = ");
-          Serial.print(dist_cm);
-          Serial.print(", angle: ");
-          Serial.println(angle_rad);
+          last_tag = millis();
+          return true;
         }
       }
     }
 
-    return tagCount;
+    return false;
 }
 
 void setup() {
@@ -73,23 +97,32 @@ void setup() {
   Serial.begin(115200);
   Serial1.begin(115200);
   digitalWrite(0, HIGH); //internal pull up
-  delay(100);
-
-  //initialize controllers
-  speedController.Init();
-  mazeFollower.init();
 
   //initialize i2c
   Wire.begin();
   Wire.setClock(100000ul);
 
-  //initialize robot state based on 
+  //initialize controllers
+  speedController.Init();
+  mazeFollower.init();
+  lsm6.Init();
+  
+  robot_state = RUNNING;
 }
 
 void loop() {
   //handle incoming mqtt messages
+  checkSerialEsp32();
 
   //detect collisions
+  auto acc = lsm6.ReadAcceleration();
+  if ((acc.X*0.061 > 500 || acc.Y*0.061 > 500) && millis()-last_collision > 1000) {
+    Serial.println("ow");
+    last_collision = millis();
+    if (robot_state == RUNNING) {
+      sendMessage("collision", String(_ROBOT_NUM));
+    }
+  }
 
   //detect apriltags
   bool tagFound = findTag();
@@ -99,6 +132,7 @@ void loop() {
   //handle robot state
   switch (robot_state) {
     case RUNNING: {
+      mazeFollower.setVelocity(250);
       //todo: implement me
       double v = mazeFollower.getVelocity();
       double omega = mazeFollower.getAngularVelocity();
@@ -107,29 +141,32 @@ void loop() {
     }
     
     case SEEKING: {
+      mazeFollower.setVelocity(100);
       double v = mazeFollower.getVelocity();
       double omega = mazeFollower.getAngularVelocity();
       speedController.Process(v-omega, v+omega);
       if (tagFound) {
+        sendMessage("tag", "x: " + String(tag.tx) + ", z: " + String(tag.tz));
         robot_state = CHASING;
+        Serial.println("Chasing");
         //todo: reset FK here
       }
       break;
     }
 
     case CHASING: {
-      if (!tagFound) {
+      if (!tagFound && millis() - last_tag > 1000) { //for now, go back to seeking after 250ms
         robot_state = SEEKING; //TODO: replace with FK-based chasing
+        Serial.println("Seeking");
         break;
       }
-
-      double dist_cm = sqrt(pow(tag.tx*X_FACTOR, 2) + pow(tag.tz*Z_FACTOR, 2)); //find the distance in x/z plane; y doesn't matter
+      
       double angle_rad = atan2(tag.tx*X_FACTOR,tag.tz*Z_FACTOR);
       double u_angular = 500 * angle_rad;
-      double u_linear = 50 * (dist_cm) * cos(angle_rad); //fancy easy way to make it move kinda nice
+      double u_linear = 350 * cos(angle_rad); //fancy easy way to make it move kinda nice, send it at the target 
 
       speedController.Process(u_linear-u_angular, u_linear+u_angular);   
     }
   }
-  delay(10);
+  delay(5);
 }
